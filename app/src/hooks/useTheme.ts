@@ -2,15 +2,12 @@ import { useEffect } from 'react';
 import { useStore } from '@/store/useStore';
 
 export function useTheme() {
-  const { settings } = useStore();
-  const { theme } = settings;
+  const theme = useStore((state) => state.settings.theme);
 
   useEffect(() => {
     const root = document.documentElement;
     const systemDark = window.matchMedia('(prefers-color-scheme: dark)').matches;
-
-    const isDark =
-      theme === 'dark' || (theme === 'system' && systemDark);
+    const isDark = theme === 'dark' || (theme === 'system' && systemDark);
 
     if (isDark) {
       root.classList.add('dark');
@@ -19,10 +16,8 @@ export function useTheme() {
     }
   }, [theme]);
 
-  // Listen for system theme changes
   useEffect(() => {
     if (theme !== 'system') return;
-
     const mediaQuery = window.matchMedia('(prefers-color-scheme: dark)');
     const handleChange = () => {
       const root = document.documentElement;
@@ -32,7 +27,6 @@ export function useTheme() {
         root.classList.remove('dark');
       }
     };
-
     mediaQuery.addEventListener('change', handleChange);
     return () => mediaQuery.removeEventListener('change', handleChange);
   }, [theme]);

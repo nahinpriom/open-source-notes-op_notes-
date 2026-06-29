@@ -736,3 +736,190 @@ if (typeof window !== 'undefined') {
     useStore.getState().addToast({ type: 'warning', message: 'You are offline. Changes saved locally.', duration: 4000 });
   });
 }
+import { create } from 'zustand';
+import { persist } from 'zustand/middleware';
+import type {
+  Note, Tag, User, AppSettings, SyncStatus, ViewType, SearchFilters, EditorState, Toast,
+} from '@/types';
+import {
+  getAllNotes, getNoteById, saveNote, deleteNotePermanently,
+  getAllTags, saveTag, getSettings, saveSettings, searchNotes,
+} from '@/lib/storage';
+import { hashPassword, verifyPassword } from '@/lib/crypto';
+
+// ... (keep all existing interfaces the same)
+
+interface AppState {
+  // Auth
+  user: User | null;
+  isAuthenticated: boolean;
+  isVaultLocked: boolean;
+  guestMode: boolean;
+  _hasHydrated: boolean;
+  login: (email: string, password: string) => Promise<boolean>;
+  signup: (email: string, password: string, displayName: string) => Promise<boolean>;
+  logout: () => void;
+  unlockVault: (password: string) => Promise<boolean>;
+  enableGuestMode: () => void;
+
+  // ... (keep rest of interfaces same)
+}
+
+// ... (defaultSettings, defaultSyncStatus, defaultEditorState same)
+
+let toastCounter = 0;
+
+export const useStore = create<AppState>()(
+  persist(
+    (set, get) => ({
+      // Auth
+      user: null,
+      isAuthenticated: false,
+      isVaultLocked: false,
+      guestMode: false,
+      _hasHydrated: false,
+
+      login: async (email: string, password: string) => {
+        const storedHash = localStorage.getItem('opnotes_password_hash');
+        const storedEmail = localStorage.getItem('opnotes_email');
+
+        if (!storedHash || !storedEmail) {
+          get().addToast({ type: 'error', message: 'No account found. Please sign up.', duration: 4000 });
+          return false;
+        }
+
+        if (storedEmail !== email) {
+          get().addToast({ type: 'error', message: 'Invalid email or password.', duration: 4000 });
+          return false;
+        }
+
+        const isValid = await verifyPassword(password, storedHash);
+        if (!isValid) {
+          get().addToast({ type: 'error', message: 'Invalid email or password.', duration: 4000 });
+          return false;
+        }
+
+        const user: User = {
+          id: storedEmail,
+          email: storedEmail,
+          displayName: localStorage.getItem('opnotes_display_name') || storedEmail.split('@')[0],
+          isAuthenticated: true,
+          createdAt: parseInt(localStorage.getItem('opnotes_created_at') || '0'),
+        };
+
+        set({ user, isAuthenticated: true, isVaultLocked: false, guestMode: false });
+        await get().loadNotes();
+        await get().loadTags();
+        await get().loadSettings();
+        get().addToast({ type: 'success', message: 'Welcome back!', duration: 3000 });
+        return true;
+      },
+
+      signup: async (email: string, password: string, displayName: string) => {
+        const existingEmail = localStorage.getItem('opnotes_email');
+        if (existingEmail) {
+          get().addToast({ type: 'error', message: 'An account already exists. Please sign in.', duration: 4000 });
+          return false;
+        }
+
+        const passwordHash = await hashPassword(password);
+        const now = Date.now();
+
+        localStorage.setItem('opnotes_email', email);
+        localStorage.setItem('opnotes_password_hash', passwordHash);
+        localStorage.setItem('opnotes_display_name', displayName);
+        localStorage.setItem('opnotes_created_at', now.toString());
+
+        const user: User = {
+          id: email,
+          email,
+          displayName,
+          isAuthenticated: true,
+          createdAt: now,
+        };
+
+        set({ user, isAuthenticated: true, isVaultLocked: false, guestMode: false });
+        await saveSettings(defaultSettings);
+        await get().loadNotes();
+        await get().loadTags();
+        await get().loadSettings();
+
+        get().addToast({ type: 'success', message: 'Account created successfully!', duration: 3000 });
+        return true;
+      },
+
+      logout: () => {
+        set({
+          user: null,
+          isAuthenticated: false,
+          isVaultLocked: false,
+          guestMode: false,
+          notes: [],
+          tags: [],
+          selectedNoteId: null,
+          activeNote: null,
+        });
+        get().addToast({ type: 'info', message: 'Signed out successfully.', duration: 3000 });
+      },
+
+      unlockVault: async (password: string) => {
+        const storedHash = localStorage.getItem('opnotes_password_hash');
+        if (!storedHash) return false;
+
+        const isValid = await verifyPassword(password, storedHash);
+        if (isValid) {
+          set({ isVaultLocked: false });
+          return true;
+        }
+        return false;
+      },
+
+      enableGuestMode: () => {
+        const guestUser: User = {
+          id: 'guest',
+          email: 'guest@local',
+          displayName: 'Guest User',
+          isAuthenticated: true,
+          createdAt: Date.now(),
+        };
+        
+        set({ 
+          user: guestUser, 
+          isAuthenticated: true, 
+          isVaultLocked: false, 
+          guestMode: true 
+        });
+        
+        // Load any existing local notes
+        get().loadNotes();
+        get().loadTags();
+        get().loadSettings();
+        
+        get().addToast({ 
+          type: 'success', 
+          message: 'Guest mode enabled. Your notes are stored locally.', 
+          duration: 4000 
+        });
+      },
+
+      // ... (keep ALL the rest of the store exactly the same: notes, tags, view, search, editor, settings, sync, toast, import/export, stats)
+      
+      // Just make sure to include _hasHydrated: false in the state object above
+    }),
+    {
+      name: 'opnotes-storage-v3',
+      partialize: (state) => ({
+        user: state.user,
+        isAuthenticated: state.isAuthenticated,
+        settings: state.settings,
+        guestMode: state.guestMode,
+      }),
+      onRehydrateStorage: () => (state) => {
+        // Mark hydration complete
+        useStore.setState({ _hasHydrated: true } as any);
+      },
+    }
+  )
+);
+
+// ... (keep helper functions: sortNotes, getRandomColor, online/offline listeners same)
